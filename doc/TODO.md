@@ -35,42 +35,53 @@ as `copyPath()` in `@m4l-jweb/bridge`.
 
 ## Open Tasks
 
-### 0. BUG - macOS: the Studio loads and plays nothing
+### 0. The macOS bugs are fixed, and what is left of them
 
-A second Mac, Live 12 Suite with its bundled Max 9.0.10, ran every device on 2026-10-07
-and the session found three bugs, all of them in the library and the first two now fixed
-(m4l-jweb, branch `fix/render-mac`):
+A second Mac - Live 12 Suite with its bundled Max 9.0.10 - ran every device on
+2026-10-07. The device drew nothing at all; by the end it drew, booted, followed the
+transport and played. Five bugs, all of them in the library, all fixed on m4l-jweb's
+branch `fix/render-mac`, all written up in its MAX-FACTS (2026-10-07):
 
-- **The page was never loaded.** The wrapper sent `url <the url>` to `[jweb~]`, and `url`
-  is what jweb SAYS, not what it is told. The device view was grey on both machines.
-- **The URL was built wrong on macOS.** `this.patcher.filepath` leads with the volume
-  name, so the wrapper built `file:///Mac:/Users/...` - a folder that does not exist.
-- **The window-size poll floods the Max console** with `SendMessage returned with error
-  9999` twice a second. Bounded now, not cured.
+1. **The page was never loaded.** The wrapper sent `url <the url>` to `[jweb~]`, and
+   `url` is what jweb SAYS, not what it is told. `read` loads a page.
+2. **The URL was wrong on macOS.** `this.patcher.filepath` leads with the volume name,
+   so the wrapper built `file:///Mac:/Users/...`, a folder that does not exist.
+3. **Every message from the device view was swallowed.** On macOS a page's
+   `max.outlet(...)` reaches `[js]` as a `list` whose first element is the selector,
+   not as a message named by it, so `anything()` ate all of them. This is the one that
+   explains the three symptoms this item used to carry: the transport buttons that did
+   nothing, the knobs that reached nothing, and the native parameters that were never
+   hidden.
+4. **The cache-buster broke the Studio.** `?v=<stamp>` is read by strudel.cc as the hash
+   of a shared pattern; it fetched a pattern that does not exist and the TypeError took
+   the engine's boot with it. A site window gets no query string now.
+5. **The window-size poll flooded the console** with `SendMessage error 9999` twice a
+   second, which made every other problem unreadable. The poll is bounded now.
 
-All three are written up in m4l-jweb's MAX-FACTS (2026-10-07).
+**What this repo owes.** The library is on a branch and this repo points at it with
+`link:` - `package.json` and `pnpm-lock.yaml` must go back to the npm version before any
+PR here. The real order is: land the library branch, publish it, then bump this repo.
 
-**What is still wrong, and is the next thing to chase.** With the first two fixed the
-device view draws, the shim comes up (`the Studio's shim is up`), the pattern is restored
-out of the set, and the Studio window opens and fits. But the Studio plays nothing: the
-code does not highlight on evaluate, and the device's own visualiser stays on "silent",
-which is driven by a real `[peakamp~]` on the window's outlets (`src/app/strudel/
-Visualizer.tsx:10`) - so there is no signal, not just no meter.
+**Still open, and now visible.**
 
-The same local strudel.cc, served over HTTP to Brave on that machine, plays correctly.
-So the engine and the bundled 16 MB are fine and the difference is the jweb window.
-
-**What is owed next:** the shim now reports through the wrapper's `log` selector, so its
-warnings reach the Max console (jweb has no inspector - that is why this was invisible).
-Read them on the next run. The first question they answer is whether the synthetic
-`mousedown` armed the AudioContext: `audio armed, context is <state>`. A context stuck in
-`suspended` is one cause and a shim that never reached the editor is the other.
-
-Note for that run: the machine had no internet, so `6/6 sample maps offline` is expected
-and correct. Test with a synth - `note("c3 e3 g3").s("sawtooth")` - and never a sample.
-
-The old reading of this item, the device view "not fitting", was wrong. It had never
-loaded.
+- **The Studio needs the network to boot, and should not.** `prebake.js` fetches the
+  seven sample maps from `strudel.b-cdn.net` before anything is played. The maps are
+  already on disk in the sidecar and the fetch is pointless; with no network it throws
+  and the engine dies. `scripts/build-repl.mjs` deliberately does not rewrite `.js`, so
+  the CDN base survives there. A narrow rewrite of `${id}/NAME.json` to `./NAME.json`
+  was written and tested during the session and then reverted at the user's request -
+  only the maps, because the AUDIO is not in the sidecar and redirecting it would turn
+  a network failure into a 404. Worth redoing: the README says these work offline.
+- **The loose `wrapper.js` in the installed folder is never updated.** The installer
+  skips it because the copy already there has a mtime in the FUTURE, so an installed
+  folder keeps the first `wrapper.js` of the day forever. It is not what runs - the
+  device uses the copy embedded in the `.amxd` - but it is a stale file that wasted an
+  hour of this session's debugging.
+- **Diagnosis inside a jweb page.** The device view and the Studio can now both speak to
+  the Max console - `page_log` from the bridge's `log()` for the device view, the `log`
+  selector for a window - and the shim forwards `error` and `unhandledrejection` with
+  their stack. That instrumentation is what turned "it does not sound" into a file and a
+  column number, and it should stay.
 
 ### 1. FEAT - a selectable TAIL on the bounce, so a reverb is not cut off
 

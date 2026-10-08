@@ -111,32 +111,6 @@
 		Wrapped.prototype = Real.prototype;
 		window[name] = Wrapped;
 	});
-	/**
-	 * Whether the REPL thinks it is playing, in whatever words it has.
-	 *
-	 * The app's internals are not ours and their shape moves between versions, so
-	 * this reads what it finds and names what it did not find rather than assuming a
-	 * path. Even "nothing to read" is an answer: it says the editor is not the object
-	 * this file thinks it is.
-	 */
-	function describePlaying() {
-		try {
-			var e = window.strudelMirror;
-			if (!e) return "no editor";
-			var bits = [];
-			if (typeof e.started !== "undefined") bits.push("started=" + e.started);
-			if (e.repl && typeof e.repl.started !== "undefined") bits.push("repl.started=" + e.repl.started);
-			if (e.repl && e.repl.scheduler && typeof e.repl.scheduler.started !== "undefined")
-				bits.push("scheduler.started=" + e.repl.scheduler.started);
-			if (e.repl && e.repl.scheduler && typeof e.repl.scheduler.phase !== "undefined")
-				bits.push("phase=" + e.repl.scheduler.phase);
-			bits.push("audio=" + audioState());
-			return bits.length ? bits.join(" ") : "nothing readable on the editor";
-		} catch (e2) {
-			return "unreadable: " + (e2 && e2.message);
-		}
-	}
-
 	function audioState() {
 		if (!contexts.length) return "no AudioContext was ever created";
 		return contexts
@@ -692,13 +666,8 @@
 		 * ------------------------------------------------------------ */
 		max.bindInlet("set_play", function (v) {
 			try {
-				// Both halves get said out loud. A transport that never arrives and one
-				// that arrives and does nothing look the same from outside the window,
-				// and they are fixed in different places.
-				note("set_play", v, "- calling", Number(v) ? "evaluate()" : "stop()");
 				if (Number(v)) editor.evaluate();
 				else editor.stop();
-				note("set_play done, pattern is", describePlaying());
 			} catch (e) {
 				warn("transport failed:", e && e.message);
 			}
@@ -718,9 +687,7 @@
 		 */
 		max.bindInlet("evaluate", function () {
 			try {
-				note("evaluate asked for");
 				editor.evaluate();
-				note("evaluate returned, pattern is", describePlaying());
 			} catch (e) {
 				warn("evaluate failed:", e && e.message);
 			}
