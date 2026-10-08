@@ -35,35 +35,42 @@ as `copyPath()` in `@m4l-jweb/bridge`.
 
 ## Open Tasks
 
-### 0. BUG - macOS: it runs, and the DEVICE VIEW does not fit
+### 0. BUG - macOS: the Studio loads and plays nothing
 
-A beta tester's Mac has run `alienmind-gugelhupf` on 1.3.2-beta and sent the console. It
-loads, the page loads, the pattern comes back out of the set, the Studio window opens the
-local strudel.cc, and **pressing play there makes sound that reaches the Ableton track** -
-so `[jweb~]` audio works on macOS. Everything the console settled is upstream in
-m4l-jweb's MAX-FACTS ("macOS, from the first Mac ever to run this").
+A second Mac, Live 12 Suite with its bundled Max 9.0.10, ran every device on 2026-10-07
+and the session found three bugs, all of them in the library and the first two now fixed
+(m4l-jweb, branch `fix/render-mac`):
 
-What is still wrong, in the tester's words: the device view is "better but still not fully
-adjusted", and from the Studio window a clip cannot be rendered and MIDI cannot be saved,
-and the device view's own transport buttons do not start or stop the Studio.
+- **The page was never loaded.** The wrapper sent `url <the url>` to `[jweb~]`, and `url`
+  is what jweb SAYS, not what it is told. The device view was grey on both machines.
+- **The URL was built wrong on macOS.** `this.patcher.filepath` leads with the volume
+  name, so the wrapper built `file:///Mac:/Users/...` - a folder that does not exist.
+- **The window-size poll floods the Max console** with `SendMessage returned with error
+  9999` twice a second. Bounded now, not cured.
 
-Three of those are one known upstream gap and one wrong track:
+All three are written up in m4l-jweb's MAX-FACTS (2026-10-07).
 
-- **A window page cannot write a file** (m4l-jweb TODO item 1). Render-a-clip and
-  save-MIDI from the Studio are both writes made from a window, so they go nowhere and say
-  nothing. Not macOS.
-- **That instance is on a MIDI track** (`this device is on a midi track` in the log). Live
-  puts an audio clip on an audio track only - `alienmind-gugelhupf-audio` on an audio
-  track is the flavour that bounces. Documented, and worth checking before anything is
-  called broken.
-- **The transport buttons not reaching the Studio is NOT explained**, and the layout may
-  be the whole of it: a control drawn outside the 169 px view, or under the layered panel,
-  cannot be hit. Get the geometry before theorising - `page box` and `native layout` in
-  the diagnostics, plus a screenshot of the same instance.
+**What is still wrong, and is the next thing to chase.** With the first two fixed the
+device view draws, the shim comes up (`the Studio's shim is up`), the pattern is restored
+out of the set, and the Studio window opens and fits. But the Studio plays nothing: the
+code does not highlight on evaluate, and the device's own visualiser stays on "silent",
+which is driven by a real `[peakamp~]` on the window's outlets (`src/app/strudel/
+Visualizer.tsx:10`) - so there is no signal, not just no meter.
 
-**What is owed by THIS repo:** the numbered checklist for that pair of readings, and then
-whatever the layout constants turn out to need. Nothing about the layout gets changed
-before the rects and the screenshot are side by side.
+The same local strudel.cc, served over HTTP to Brave on that machine, plays correctly.
+So the engine and the bundled 16 MB are fine and the difference is the jweb window.
+
+**What is owed next:** the shim now reports through the wrapper's `log` selector, so its
+warnings reach the Max console (jweb has no inspector - that is why this was invisible).
+Read them on the next run. The first question they answer is whether the synthetic
+`mousedown` armed the AudioContext: `audio armed, context is <state>`. A context stuck in
+`suspended` is one cause and a shim that never reached the editor is the other.
+
+Note for that run: the machine had no internet, so `6/6 sample maps offline` is expected
+and correct. Test with a synth - `note("c3 e3 g3").s("sawtooth")` - and never a sample.
+
+The old reading of this item, the device view "not fitting", was wrong. It had never
+loaded.
 
 ### 1. FEAT - a selectable TAIL on the bounce, so a reverb is not cut off
 
