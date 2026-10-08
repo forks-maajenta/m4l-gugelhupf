@@ -87,6 +87,65 @@
 		warn("unhandled rejection:", (r && (r.message || r)) || "?", "|", stack);
 	});
 
+	/**
+	 * Hold on to whatever AudioContext the app makes.
+	 *
+	 * The app exposes none, and its own path to one changes with its internals, so
+	 * asking the editor for it guesses at a shape. Wrapping the constructor does not:
+	 * this file is injected at the end of the body and the context is not built until
+	 * the first mousedown, so every context the app creates goes through here. A
+	 * context in `suspended` is the single most likely reason for a Studio that boots,
+	 * evaluates and makes no sound - Chromium will not start audio until it has seen a
+	 * real user gesture, and the shim's synthetic mousedown may not count as one.
+	 */
+	var contexts = [];
+	["AudioContext", "webkitAudioContext"].forEach(function (name) {
+		var Real = window[name];
+		if (!Real) return;
+		function Wrapped() {
+			var made = new (Function.prototype.bind.apply(Real, [null].concat(Array.prototype.slice.call(arguments))))();
+			contexts.push(made);
+			note("AudioContext created, state", made.state, "- rate", made.sampleRate);
+			return made;
+		}
+		Wrapped.prototype = Real.prototype;
+		window[name] = Wrapped;
+	});
+	/**
+	 * Whether the REPL thinks it is playing, in whatever words it has.
+	 *
+	 * The app's internals are not ours and their shape moves between versions, so
+	 * this reads what it finds and names what it did not find rather than assuming a
+	 * path. Even "nothing to read" is an answer: it says the editor is not the object
+	 * this file thinks it is.
+	 */
+	function describePlaying() {
+		try {
+			var e = window.strudelMirror;
+			if (!e) return "no editor";
+			var bits = [];
+			if (typeof e.started !== "undefined") bits.push("started=" + e.started);
+			if (e.repl && typeof e.repl.started !== "undefined") bits.push("repl.started=" + e.repl.started);
+			if (e.repl && e.repl.scheduler && typeof e.repl.scheduler.started !== "undefined")
+				bits.push("scheduler.started=" + e.repl.scheduler.started);
+			if (e.repl && e.repl.scheduler && typeof e.repl.scheduler.phase !== "undefined")
+				bits.push("phase=" + e.repl.scheduler.phase);
+			bits.push("audio=" + audioState());
+			return bits.length ? bits.join(" ") : "nothing readable on the editor";
+		} catch (e2) {
+			return "unreadable: " + (e2 && e2.message);
+		}
+	}
+
+	function audioState() {
+		if (!contexts.length) return "no AudioContext was ever created";
+		return contexts
+			.map(function (c) {
+				return c.state;
+			})
+			.join(", ");
+	}
+
 	var SETTINGS_PREFIX = "strudel-settings"; // website/src/settings.mjs, nanostores persistentMap
 	var DEFAULT_DEVICE = "System Standard"; // superdough.mjs DEFAULT_AUDIO_DEVICE_NAME
 	var LOADING = "// LOADING"; // the REPL's placeholder buffer while it boots
@@ -533,19 +592,27 @@
 		 * ------------------------------------------------------------ */
 		try {
 			document.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-			// The state of the arming is the first thing asked for when the Studio is
-			// silent, and a synthetic mousedown that the app ignored looks exactly
-			// like one it honoured. The app exposes no context getter on `window`, so
-			// ask the editor's own repl for it and say what it is - `running` means the
-			// click took, `suspended` means it did not, and a context that is simply
-			// not there yet is a third answer worth telling apart from the other two.
-			var ac = null;
-			try {
-				ac = (editor.repl && editor.repl.scheduler && editor.repl.scheduler.audioContext) || null;
-			} catch (e2) {
-				/* reading it must never be the thing that breaks the arming */
-			}
-			note("audio armed, context is", ac ? ac.state : "not reachable from the editor");
+			// The app builds its context asynchronously, so read it a moment later and
+			// not on this line, where there is nothing to read yet. A `suspended` here
+			// means the synthetic mousedown was not accepted as a user gesture, and a
+			// `resume()` on a context that already exists is the thing to try next.
+			setTimeout(function () {
+				note("audio armed, context", audioState());
+				// A suspended context is the one failure here that has a cure, and it
+				// costs nothing to apply: `resume()` is refused only where the gesture
+				// policy applies, and it is a no-op on a context already running.
+				contexts.forEach(function (c) {
+					if (c.state !== "suspended") return;
+					c.resume().then(
+						function () {
+							note("resumed a suspended context, now", c.state);
+						},
+						function (e2) {
+							warn("could not resume a suspended context:", e2 && e2.message);
+						},
+					);
+				});
+			}, 1500);
 		} catch (e) {
 			warn("could not arm the audio:", e && e.message);
 		}
@@ -625,8 +692,13 @@
 		 * ------------------------------------------------------------ */
 		max.bindInlet("set_play", function (v) {
 			try {
+				// Both halves get said out loud. A transport that never arrives and one
+				// that arrives and does nothing look the same from outside the window,
+				// and they are fixed in different places.
+				note("set_play", v, "- calling", Number(v) ? "evaluate()" : "stop()");
 				if (Number(v)) editor.evaluate();
 				else editor.stop();
+				note("set_play done, pattern is", describePlaying());
 			} catch (e) {
 				warn("transport failed:", e && e.message);
 			}
@@ -646,7 +718,9 @@
 		 */
 		max.bindInlet("evaluate", function () {
 			try {
+				note("evaluate asked for");
 				editor.evaluate();
+				note("evaluate returned, pattern is", describePlaying());
 			} catch (e) {
 				warn("evaluate failed:", e && e.message);
 			}
