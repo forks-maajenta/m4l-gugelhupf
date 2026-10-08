@@ -65,6 +65,28 @@
 		say("log", arguments);
 	}
 
+	/**
+	 * Everything the page throws, not just what this file catches.
+	 *
+	 * The shim can only report its own try/catch, and the interesting failures are
+	 * the engine's: an evaluate that throws, a worklet that will not load, a promise
+	 * nobody awaited. Inside jweb those land in a console with no reader, so the
+	 * Studio simply does nothing and says nothing. These two hooks are the whole
+	 * difference between "it does not play" and a line naming the reason.
+	 */
+	window.addEventListener("error", function (e) {
+		warn("page error:", (e && e.message) || "?", "at", (e && e.filename) || "?", (e && e.lineno) || "");
+	});
+	window.addEventListener("unhandledrejection", function (e) {
+		var r = e && e.reason;
+		// The message alone names no code. The site is minified, so the stack is one
+		// line of chunk and offset, but that is still the difference between knowing
+		// WHICH chunk threw and guessing. Max splits a message on whitespace, so the
+		// newlines go first or the trace arrives as a shower of atoms.
+		var stack = r && r.stack ? String(r.stack).replace(/\s+/g, " ").slice(0, 400) : "no stack";
+		warn("unhandled rejection:", (r && (r.message || r)) || "?", "|", stack);
+	});
+
 	var SETTINGS_PREFIX = "strudel-settings"; // website/src/settings.mjs, nanostores persistentMap
 	var DEFAULT_DEVICE = "System Standard"; // superdough.mjs DEFAULT_AUDIO_DEVICE_NAME
 	var LOADING = "// LOADING"; // the REPL's placeholder buffer while it boots
@@ -513,9 +535,17 @@
 			document.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
 			// The state of the arming is the first thing asked for when the Studio is
 			// silent, and a synthetic mousedown that the app ignored looks exactly
-			// like one it honoured. Say what the AudioContext actually became.
-			var ac = window.getAudioContext ? window.getAudioContext() : null;
-			note("audio armed, context is", ac ? ac.state : "not created yet");
+			// like one it honoured. The app exposes no context getter on `window`, so
+			// ask the editor's own repl for it and say what it is - `running` means the
+			// click took, `suspended` means it did not, and a context that is simply
+			// not there yet is a third answer worth telling apart from the other two.
+			var ac = null;
+			try {
+				ac = (editor.repl && editor.repl.scheduler && editor.repl.scheduler.audioContext) || null;
+			} catch (e2) {
+				/* reading it must never be the thing that breaks the arming */
+			}
+			note("audio armed, context is", ac ? ac.state : "not reachable from the editor");
 		} catch (e) {
 			warn("could not arm the audio:", e && e.message);
 		}
