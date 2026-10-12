@@ -36,6 +36,90 @@
 	"use strict";
 
 	var TAG = "[m4l-shim]";
+
+	/**
+	 * Say it where somebody can read it.
+	 *
+	 * This file runs inside a jweb window, and jweb ships no inspector: a
+	 * `console.warn` in here is written to a console nobody can open, which is how a
+	 * silent Studio stayed unexplained for a whole debugging session. The wrapper
+	 * handles a `log` selector that posts to the Max window, so each line goes out
+	 * twice - to the page's console, which a browser run can read, and to Max, which
+	 * is the only reader a run inside the device has. `window.max` exists only in
+	 * the second case.
+	 */
+	function say(level, parts) {
+		var text = Array.prototype.slice.call(parts).join(" ");
+		if (level === "warn") console.warn(TAG, text);
+		else console.log(TAG, text);
+		try {
+			if (window.max && window.max.outlet) window.max.outlet("log", text);
+		} catch (e) {
+			/* a shim that throws while reporting is worse than one that stays quiet */
+		}
+	}
+	function warn() {
+		say("warn", arguments);
+	}
+	function note() {
+		say("log", arguments);
+	}
+
+	/**
+	 * Everything the page throws, not just what this file catches.
+	 *
+	 * The shim can only report its own try/catch, and the interesting failures are
+	 * the engine's: an evaluate that throws, a worklet that will not load, a promise
+	 * nobody awaited. Inside jweb those land in a console with no reader, so the
+	 * Studio simply does nothing and says nothing. These two hooks are the whole
+	 * difference between "it does not play" and a line naming the reason.
+	 */
+	window.addEventListener("error", function (e) {
+		warn("page error:", (e && e.message) || "?", "at", (e && e.filename) || "?", (e && e.lineno) || "");
+	});
+	window.addEventListener("unhandledrejection", function (e) {
+		var r = e && e.reason;
+		// The message alone names no code. The site is minified, so the stack is one
+		// line of chunk and offset, but that is still the difference between knowing
+		// WHICH chunk threw and guessing. Max splits a message on whitespace, so the
+		// newlines go first or the trace arrives as a shower of atoms.
+		var stack = r && r.stack ? String(r.stack).replace(/\s+/g, " ").slice(0, 400) : "no stack";
+		warn("unhandled rejection:", (r && (r.message || r)) || "?", "|", stack);
+	});
+
+	/**
+	 * Hold on to whatever AudioContext the app makes.
+	 *
+	 * The app exposes none, and its own path to one changes with its internals, so
+	 * asking the editor for it guesses at a shape. Wrapping the constructor does not:
+	 * this file is injected at the end of the body and the context is not built until
+	 * the first mousedown, so every context the app creates goes through here. A
+	 * context in `suspended` is the single most likely reason for a Studio that boots,
+	 * evaluates and makes no sound - Chromium will not start audio until it has seen a
+	 * real user gesture, and the shim's synthetic mousedown may not count as one.
+	 */
+	var contexts = [];
+	["AudioContext", "webkitAudioContext"].forEach(function (name) {
+		var Real = window[name];
+		if (!Real) return;
+		function Wrapped() {
+			var made = new (Function.prototype.bind.apply(Real, [null].concat(Array.prototype.slice.call(arguments))))();
+			contexts.push(made);
+			note("AudioContext created, state", made.state, "- rate", made.sampleRate);
+			return made;
+		}
+		Wrapped.prototype = Real.prototype;
+		window[name] = Wrapped;
+	});
+	function audioState() {
+		if (!contexts.length) return "no AudioContext was ever created";
+		return contexts
+			.map(function (c) {
+				return c.state;
+			})
+			.join(", ");
+	}
+
 	var SETTINGS_PREFIX = "strudel-settings"; // website/src/settings.mjs, nanostores persistentMap
 	var DEFAULT_DEVICE = "System Standard"; // superdough.mjs DEFAULT_AUDIO_DEVICE_NAME
 	var LOADING = "// LOADING"; // the REPL's placeholder buffer while it boots
@@ -48,7 +132,7 @@
 		localStorage.setItem(SETTINGS_PREFIX + "audioDeviceName", DEFAULT_DEVICE);
 	} catch (e) {
 		// Never let this file be the reason a page fails to load.
-		console.warn(TAG, "could not pin the audio device:", e && e.message);
+		warn("could not pin the audio device:", e && e.message);
 	}
 
 	/* -------------------------------------------------------------- *
@@ -468,7 +552,7 @@
 				fn(window.strudelMirror, window.max);
 			} else if (tries > 300) {
 				clearInterval(poll);
-				console.warn(TAG, "gave up waiting for", window.max ? "the REPL" : "window.max");
+				warn("gave up waiting for", window.max ? "the REPL" : "window.max");
 			}
 		}, 100);
 	}
@@ -482,8 +566,29 @@
 		 * ------------------------------------------------------------ */
 		try {
 			document.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+			// The app builds its context asynchronously, so read it a moment later and
+			// not on this line, where there is nothing to read yet. A `suspended` here
+			// means the synthetic mousedown was not accepted as a user gesture, and a
+			// `resume()` on a context that already exists is the thing to try next.
+			setTimeout(function () {
+				note("audio armed, context", audioState());
+				// A suspended context is the one failure here that has a cure, and it
+				// costs nothing to apply: `resume()` is refused only where the gesture
+				// policy applies, and it is a no-op on a context already running.
+				contexts.forEach(function (c) {
+					if (c.state !== "suspended") return;
+					c.resume().then(
+						function () {
+							note("resumed a suspended context, now", c.state);
+						},
+						function (e2) {
+							warn("could not resume a suspended context:", e2 && e2.message);
+						},
+					);
+				});
+			}, 1500);
 		} catch (e) {
-			console.warn(TAG, "could not arm the audio:", e && e.message);
+			warn("could not arm the audio:", e && e.message);
 		}
 
 		/* ------------------------------------------------------------ *
@@ -503,7 +608,7 @@
 			restored = true;
 			if (pending.length && pending !== editor.code) {
 				editor.setCode(pending);
-				console.log(TAG, "restored the pattern from the Live set");
+				note("restored the pattern from the Live set");
 			}
 			lastSentCode = editor.code;
 		}
@@ -522,7 +627,7 @@
 				pending = code;
 				applyRestore();
 			} catch (e) {
-				console.warn(TAG, "bad code slot:", e && e.message);
+				warn("bad code slot:", e && e.message);
 			}
 		});
 		max.outlet("get_state", "code");
@@ -543,7 +648,7 @@
 			try {
 				syncSliders();
 			} catch (e) {
-				console.warn(TAG, "slider sync failed:", e && e.message);
+				warn("slider sync failed:", e && e.message);
 			}
 			if (!restored) return;
 			var code = editor.code;
@@ -552,7 +657,7 @@
 			try {
 				max.outlet("sync_state", "code", encodeSlot(code));
 			} catch (e) {
-				console.warn(TAG, "could not persist the pattern:", e && e.message);
+				warn("could not persist the pattern:", e && e.message);
 			}
 		}, 1000);
 
@@ -564,7 +669,7 @@
 				if (Number(v)) editor.evaluate();
 				else editor.stop();
 			} catch (e) {
-				console.warn(TAG, "transport failed:", e && e.message);
+				warn("transport failed:", e && e.message);
 			}
 		});
 
@@ -584,7 +689,7 @@
 			try {
 				editor.evaluate();
 			} catch (e) {
-				console.warn(TAG, "evaluate failed:", e && e.message);
+				warn("evaluate failed:", e && e.message);
 			}
 		});
 
@@ -615,12 +720,12 @@
 					var log = globalThis.logger;
 					var msg = "m4l: the device's dials are live - use m4lKnob(1..8), e.g. .lpf(m4lKnob(1).range(200,2200))";
 					if (typeof log === "function") log(msg);
-					else console.log(TAG, msg);
+					else note(msg);
 				});
 			})(i);
 		}
 
 		max.outlet("shim_ready", 1);
-		console.log(TAG, "ready - pattern persists to the Live set, transport and knobs are live");
+		note("ready - pattern persists to the Live set, transport and knobs are live");
 	});
 })();

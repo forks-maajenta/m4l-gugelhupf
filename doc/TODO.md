@@ -35,35 +35,53 @@ as `copyPath()` in `@m4l-jweb/bridge`.
 
 ## Open Tasks
 
-### 0. BUG - macOS: it runs, and the DEVICE VIEW does not fit
+### 0. The macOS bugs are fixed, and what is left of them
 
-A beta tester's Mac has run `alienmind-gugelhupf` on 1.3.2-beta and sent the console. It
-loads, the page loads, the pattern comes back out of the set, the Studio window opens the
-local strudel.cc, and **pressing play there makes sound that reaches the Ableton track** -
-so `[jweb~]` audio works on macOS. Everything the console settled is upstream in
-m4l-jweb's MAX-FACTS ("macOS, from the first Mac ever to run this").
+A second Mac - Live 12 Suite with its bundled Max 9.0.10 - ran every device on
+2026-10-07. The device drew nothing at all; by the end it drew, booted, followed the
+transport and played. Five bugs, all of them in the library, all fixed on m4l-jweb's
+branch `fix/render-mac`, all written up in its MAX-FACTS (2026-10-07):
 
-What is still wrong, in the tester's words: the device view is "better but still not fully
-adjusted", and from the Studio window a clip cannot be rendered and MIDI cannot be saved,
-and the device view's own transport buttons do not start or stop the Studio.
+1. **The page was never loaded.** The wrapper sent `url <the url>` to `[jweb~]`, and
+   `url` is what jweb SAYS, not what it is told. `read` loads a page.
+2. **The URL was wrong on macOS.** `this.patcher.filepath` leads with the volume name,
+   so the wrapper built `file:///Mac:/Users/...`, a folder that does not exist.
+3. **Every message from the device view was swallowed.** On macOS a page's
+   `max.outlet(...)` reaches `[js]` as a `list` whose first element is the selector,
+   not as a message named by it, so `anything()` ate all of them. This is the one that
+   explains the three symptoms this item used to carry: the transport buttons that did
+   nothing, the knobs that reached nothing, and the native parameters that were never
+   hidden.
+4. **The cache-buster broke the Studio.** `?v=<stamp>` is read by strudel.cc as the hash
+   of a shared pattern; it fetched a pattern that does not exist and the TypeError took
+   the engine's boot with it. A site window gets no query string now.
+5. **The window-size poll flooded the console** with `SendMessage error 9999` twice a
+   second, which made every other problem unreadable. The poll is bounded now.
 
-Three of those are one known upstream gap and one wrong track:
+**What this repo owes.** The library is on a branch and this repo points at it with
+`link:` - `package.json` and `pnpm-lock.yaml` must go back to the npm version before any
+PR here. The real order is: land the library branch, publish it, then bump this repo.
 
-- **A window page cannot write a file** (m4l-jweb TODO item 1). Render-a-clip and
-  save-MIDI from the Studio are both writes made from a window, so they go nowhere and say
-  nothing. Not macOS.
-- **That instance is on a MIDI track** (`this device is on a midi track` in the log). Live
-  puts an audio clip on an audio track only - `alienmind-gugelhupf-audio` on an audio
-  track is the flavour that bounces. Documented, and worth checking before anything is
-  called broken.
-- **The transport buttons not reaching the Studio is NOT explained**, and the layout may
-  be the whole of it: a control drawn outside the 169 px view, or under the layered panel,
-  cannot be hit. Get the geometry before theorising - `page box` and `native layout` in
-  the diagnostics, plus a screenshot of the same instance.
+**Still open, and now visible.**
 
-**What is owed by THIS repo:** the numbered checklist for that pair of readings, and then
-whatever the layout constants turn out to need. Nothing about the layout gets changed
-before the rects and the screenshot are side by side.
+- **The Studio needs the network to boot, and should not.** `prebake.js` fetches the
+  seven sample maps from `strudel.b-cdn.net` before anything is played. The maps are
+  already on disk in the sidecar and the fetch is pointless; with no network it throws
+  and the engine dies. `scripts/build-repl.mjs` deliberately does not rewrite `.js`, so
+  the CDN base survives there. A narrow rewrite of `${id}/NAME.json` to `./NAME.json`
+  was written and tested during the session and then reverted at the user's request -
+  only the maps, because the AUDIO is not in the sidecar and redirecting it would turn
+  a network failure into a 404. Worth redoing: the README says these work offline.
+- **The loose `wrapper.js` in the installed folder is never updated.** The installer
+  skips it because the copy already there has a mtime in the FUTURE, so an installed
+  folder keeps the first `wrapper.js` of the day forever. It is not what runs - the
+  device uses the copy embedded in the `.amxd` - but it is a stale file that wasted an
+  hour of this session's debugging.
+- **Diagnosis inside a jweb page.** The device view and the Studio can now both speak to
+  the Max console - `page_log` from the bridge's `log()` for the device view, the `log`
+  selector for a window - and the shim forwards `error` and `unhandledrejection` with
+  their stack. That instrumentation is what turned "it does not sound" into a file and a
+  column number, and it should stay.
 
 ### 1. FEAT - a selectable TAIL on the bounce, so a reverb is not cut off
 
